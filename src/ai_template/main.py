@@ -1,14 +1,17 @@
 from contextlib import asynccontextmanager
 from typing import Annotated
 from fastapi import FastAPI, Depends, HTTPException, status
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 
 from ai_template.database import get_db, engine
 from ai_template.models import User, Base
-from ai_template.schemas import UserCreate, UserResponse
+from ai_template.schemas import ChatRequest, ChatResponse, UserCreate, UserResponse
 from ai_template.security import get_password_hash
+from ai_template.llm import ask_ollama
+from ai_template.config import settings
 
 
 @asynccontextmanager
@@ -50,3 +53,21 @@ async def sign_up(user_data : UserCreate,db:DBDep):
 
 
     return new_user
+
+
+@app.post('/chat',response_model = ChatResponse)
+async def chat(request:ChatRequest): 
+    try:
+        ai_reply = await ask_ollama(request.prompt)
+    except httpx.HTTPError as e :
+        raise HTTPException(
+            status_code = status.HTTP_503_SERVICE_UNAVAILBLE,
+            detail = f"Ai service is currently unavailable : {str(e)}"
+        )
+            
+
+    return ChatResponse(
+        response = ai_reply,
+        model = settings.ollama_model
+    )
+
