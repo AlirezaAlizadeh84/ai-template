@@ -9,8 +9,8 @@ import jwt
 
 
 from ai_template.database import get_db, engine
-from ai_template.models import User, Base
-from ai_template.schemas import ChatRequest, ChatResponse, UserCreate, UserResponse,Token
+from ai_template.models import ChatMessage, User, Base
+from ai_template.schemas import ChatHistoryResponse, ChatRequest, ChatResponse, UserCreate, UserResponse,Token
 from ai_template.security import get_password_hash,verify_password,create_access_token
 from ai_template.llm import ask_ollama
 from ai_template.config import settings
@@ -87,23 +87,39 @@ async def sign_up(user_data : UserCreate,db:DBDep):
 
     return new_user
 
+
+
 CurrentUserDep = Annotated[User,Depends(get_current_user)]
 
-@app.post('/chat',response_model = ChatResponse)
-async def chat(request:ChatRequest,current_user : CurrentUserDep): 
+@app.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest, current_user: CurrentUserDep, db: DBDep):
     try:
         ai_reply = await ask_ollama(request.prompt)
-    except httpx.HTTPError as e :
+    except httpx.HTTPError as e:
         raise HTTPException(
-            status_code = status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail = f"Ai service is currently unavailable : {str(e)}"
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI service is currently unavailable: {str(e)}",
         )
-            
 
-    return ChatResponse(
-        response = ai_reply,
-        model = settings.ollama_model
+    chat_message = ChatMessage(
+        user_id=current_user.id,
+        prompt=request.prompt,
+        response=ai_reply,
+        model=settings.ollama_model,
     )
+    db.add(chat_message)
+    await db.commit()
+
+    return ChatResponse(response=ai_reply, model=settings.ollama_model)
+
+
+@app.get('/chat/history',response_model = list[ChatHistoryResponse])
+async def get_chat_history(db:DBDep,current_user : CurrentUserDep) :
+    
+    query = select(ChatMessage).where(ChatMessage.user_id == current_user.id).order_by(ChatMessage.created_at.desc())
+    result = await db.execute(query)
+    return result.scalars().all()
+        
 
 
 
