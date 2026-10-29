@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 from typing import Annotated
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, Query, status
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -93,14 +93,37 @@ CurrentUserDep = Annotated[User,Depends(get_current_user)]
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest, current_user: CurrentUserDep, db: DBDep):
+    # ۱. واکشی ۵ پیام آخر کاربر برای ساخت حافظه (Context)
+    query = (
+        select(ChatMessage)
+        .where(ChatMessage.user_id == current_user.id)
+        .order_by(ChatMessage.created_at.desc())
+        .limit(5)
+    )
+    result = await db.execute(query)
+    recent_messages = result.scalars().all()
+
+    # ۲. ساخت پرامپت هوشمند در صورت وجود سابقه چت
+    if recent_messages:
+        context = ""
+        for msg in reversed(recent_messages):
+            context += f"User: {msg.prompt}\nAI: {msg.response}\n"
+        full_prompt = (
+            f"Previous conversation:\n{context}\nCurrent question:\nUser: {request.prompt}"
+        )
+    else:
+        full_prompt = request.prompt
+
+    # ۳. ارسال به سرویس هوش مصنوعی Ollama
     try:
-        ai_reply = await ask_ollama(request.prompt)
+        ai_reply = await ask_ollama(full_prompt)
     except httpx.HTTPError as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"AI service is currently unavailable: {str(e)}",
         )
 
+    # ۴. ذخیره فقط سوال جدید و پاسخ آن در دیتابیس
     chat_message = ChatMessage(
         user_id=current_user.id,
         prompt=request.prompt,
@@ -114,9 +137,20 @@ async def chat(request: ChatRequest, current_user: CurrentUserDep, db: DBDep):
 
 
 @app.get('/chat/history',response_model = list[ChatHistoryResponse])
-async def get_chat_history(db:DBDep,current_user : CurrentUserDep) :
+async def get_chat_history(db:DBDep,current_user : CurrentUserDep,
+                           skip : Annotated[int,Query(ge=0)] = 0 ,
+                           limit : Annotated[int,Query (ge=1,le=100)] = 20) :
     
-    query = select(ChatMessage).where(ChatMessage.user_id == current_user.id).order_by(ChatMessage.created_at.desc())
+    query = (
+
+        select(ChatMessage)
+        .where(ChatMessage.user_id == current_user.id)
+        .order_by(ChatMessage.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+
+        )
+    
     result = await db.execute(query)
     return result.scalars().all()
         
