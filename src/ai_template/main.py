@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import FastAPI, Depends, HTTPException, Query, status
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from fastapi.security import OAuth2PasswordRequestForm,OAuth2PasswordBearer
 import jwt
 
@@ -32,6 +32,7 @@ OAuthFormDep = Annotated[OAuth2PasswordRequestForm,Depends()]
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
 
 
+
 async def get_current_user(db: DBDep, token: Annotated[str, Depends(oauth2_scheme)]) -> User:
 
     credentials_exception = HTTPException(
@@ -56,6 +57,8 @@ async def get_current_user(db: DBDep, token: Annotated[str, Depends(oauth2_schem
         raise credentials_exception
 
     return user
+
+CurrentUserDep = Annotated[User,Depends(get_current_user)]
 
 
 
@@ -89,7 +92,7 @@ async def sign_up(user_data : UserCreate,db:DBDep):
 
 
 
-CurrentUserDep = Annotated[User,Depends(get_current_user)]
+
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest, current_user: CurrentUserDep, db: DBDep):
@@ -176,4 +179,8 @@ async def login(form_data : OAuthFormDep,db : DBDep):
     return {"access_token":access_token,"token_type":"bearer"}
 
 
-
+@app.delete("/chat/history", status_code = status.HTTP_204_NO_CONTENT)
+async def delete_chat_history(current_user : CurrentUserDep,db : DBDep):
+    query = delete(ChatMessage).where(ChatMessage.user_id == current_user.id)
+    await db.execute(query)
+    await db.commit()
