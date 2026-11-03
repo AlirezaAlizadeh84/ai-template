@@ -6,14 +6,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import delete, select
 from fastapi.security import OAuth2PasswordRequestForm,OAuth2PasswordBearer
 import jwt
+from fastapi.responses import StreamingResponse
 
 
 from ai_template.database import get_db, engine
 from ai_template.models import ChatMessage, User, Base
 from ai_template.schemas import ChatHistoryResponse, ChatRequest, ChatResponse, UserCreate, UserResponse,Token
 from ai_template.security import get_password_hash,verify_password,create_access_token
-from ai_template.llm import ask_ollama
+from ai_template.llm import ask_ollama,stream_ollama
 from ai_template.config import settings
+
+
+
 
 
 @asynccontextmanager
@@ -30,6 +34,7 @@ app = FastAPI(title="My AI Project API", lifespan=lifespan)
 DBDep = Annotated[AsyncSession,Depends(get_db)]
 OAuthFormDep = Annotated[OAuth2PasswordRequestForm,Depends()]
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
+
 
 
 
@@ -179,8 +184,59 @@ async def login(form_data : OAuthFormDep,db : DBDep):
     return {"access_token":access_token,"token_type":"bearer"}
 
 
+
+
+
 @app.delete("/chat/history", status_code = status.HTTP_204_NO_CONTENT)
 async def delete_chat_history(current_user : CurrentUserDep,db : DBDep):
     query = delete(ChatMessage).where(ChatMessage.user_id == current_user.id)
     await db.execute(query)
     await db.commit()
+
+
+
+@app.post("/chat/stream")
+async def chat_stream(
+    request: ChatRequest, current_user: CurrentUserDep, db: DBDep
+):
+    query = (
+        select(ChatMessage)
+        .where(ChatMessage.user_id == current_user.id)
+        .order_by(ChatMessage.created_at.desc())
+        .limit(5)
+    )
+    result = await db.execute(query)
+    recent_messages = result.scalars().all()
+
+    if recent_messages:
+        context = ""
+        for msg in reversed(recent_messages):
+            context += f"User: {msg.prompt}\nAI: {msg.response}\n"
+
+        full_prompt = (
+            f"Previous conversation:\n{context}\nCurrent question:\nUser: {request.prompt}"
+        )
+    else:
+        full_prompt = request.prompt
+
+    async def response_generator():
+        full_response = ""
+        try:
+            async for chunk in stream_ollama(full_prompt):
+                full_response += chunk
+                yield chunk
+        except httpx.HTTPError as e:
+            yield f"\n[Error: AI service unavailable - {str(e)}]"
+            return
+
+        chat_message = ChatMessage(
+            user_id=current_user.id,
+            prompt=request.prompt,
+            response=full_response,
+            model=settings.ollama_model,
+        )
+        db.add(chat_message)
+        await db.commit()
+
+    return StreamingResponse(response_generator(), media_type="text/plain")  
+
