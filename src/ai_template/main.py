@@ -195,6 +195,7 @@ async def delete_chat_history(current_user : CurrentUserDep,db : DBDep):
 
 
 
+
 @app.post("/chat/stream")
 async def chat_stream(
     request: ChatRequest, current_user: CurrentUserDep, db: DBDep
@@ -240,3 +241,23 @@ async def chat_stream(
 
     return StreamingResponse(response_generator(), media_type="text/plain")  
 
+
+
+
+@app.delete("/chat/history/{message_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_single_message(
+    message_id: int, current_user: CurrentUserDep, db: DBDep
+):
+    query = delete(ChatMessage).where(
+        ChatMessage.id == message_id,
+        ChatMessage.user_id == current_user.id,
+    )
+    result = await db.execute(query)
+
+    if result.rowcount == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Message not found or does not belong to this user",
+        )
+
+    await db.commit()
