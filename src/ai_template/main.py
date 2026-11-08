@@ -243,21 +243,29 @@ async def chat_stream(
 
 
 
-
 @app.delete("/chat/history/{message_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_single_message(
     message_id: int, current_user: CurrentUserDep, db: DBDep
 ):
-    query = delete(ChatMessage).where(
+    query = select(ChatMessage).where(
         ChatMessage.id == message_id,
         ChatMessage.user_id == current_user.id,
     )
     result = await db.execute(query)
+    record = result.scalar_one_or_none()
 
-    if result.rowcount == 0:
+    if not record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Message not found or does not belong to this user",
         )
 
+    await db.delete(record)
     await db.commit()
+
+
+
+@app.get("/users/me", response_model=UserResponse)
+async def get_user_information(current_user: CurrentUserDep):
+    return current_user
+
