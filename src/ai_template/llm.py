@@ -4,6 +4,9 @@ import httpx
 from ai_template.config import settings
 
 
+
+
+
 async def ask_ollama(prompt: str) -> str:
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(
@@ -18,6 +21,8 @@ async def ask_ollama(prompt: str) -> str:
 
     data = response.json()
     return data["response"]
+
+
 
 
 async def stream_ollama(prompt: str) -> AsyncGenerator[str, None]:
@@ -38,3 +43,5 @@ async def stream_ollama(prompt: str) -> AsyncGenerator[str, None]:
                 if line:
                     chunk = json.loads(line).get("response", "")
                     yield chunk
+
+                    
