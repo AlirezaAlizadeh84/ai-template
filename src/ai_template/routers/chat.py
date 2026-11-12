@@ -10,7 +10,7 @@ from ai_template.database import AsyncSessionLocal
 from ai_template.dependencies import CurrentUserDep, DBDep
 from ai_template.llm import ask_ollama, stream_ollama
 from ai_template.models import ChatMessage
-from ai_template.schemas import ChatHistoryResponse, ChatRequest, ChatResponse
+from ai_template.schemas import ChatHistoryResponse, ChatRequest, ChatResponse, ChatUpdate
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
@@ -147,4 +147,40 @@ async def delete_single_message(
 
     await db.delete(record)
     await db.commit()
-    
+
+
+@router.patch("/history/{message_id}", response_model=ChatHistoryResponse)
+async def update_prompt(
+    message_id: int,
+    update_data: ChatUpdate,
+    db: DBDep,
+    current_user: CurrentUserDep,
+):
+    query = select(ChatMessage).where(
+        ChatMessage.user_id == current_user.id,
+        ChatMessage.id == message_id,
+    )
+    result = await db.execute(query)
+    record = result.scalars().first()
+
+    if not record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Message not found!",
+        )
+
+    try:
+        new_reply = await ask_ollama(update_data.prompt)
+    except httpx.HTTPError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI service is currently unavailable: {str(e)}",
+        )
+
+    record.prompt = update_data.prompt
+    record.response = new_reply
+
+    await db.commit()
+    await db.refresh(record)
+
+    return record
